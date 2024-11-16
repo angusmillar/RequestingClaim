@@ -42,21 +42,23 @@ public class ClaimOperation(
         ClaimRequest? claimRequest = GetValidClaimRequest(claimParameters);
         if (claimRequest == null)
         {
+            LogErrorMessage("[Unknown]");
             return GetErrorClaimOperationOutcome();
         }
 
-        LogRequestClaim(claimRequest);
+        LogIncommingClaimRequest(claimRequest);
 
         _fhirNavigator = fhirNavigatorFactory.GetFhirNavigator(webAppSettings.Value.DefaultFhirRepositoryCode);
 
         Organization? targetFillerOrganization = await GetOrganization(claimRequest.organization);
         if (targetFillerOrganization == null)
         {
+            _errorMessageList.Add($"Claim failed as no claimant Organization resource was not found");
             LogErrorMessage(claimRequest.requisition.Value);
             return GetOrganizationNotFoundClaimOperationOutcome();
         }
 
-        logger.LogInformation("{Requisition}: Found target organization: {OrganizationId} with Name: {OrganizationName}",
+        logger.LogInformation("{Requisition}: Found claimant organization {OrganizationName}, with resource id {OrganizationId}",
             claimRequest.requisition.Value,
             targetFillerOrganization.Id, 
             targetFillerOrganization.Name);
@@ -64,11 +66,13 @@ public class ClaimOperation(
         List<Hl7.Fhir.Model.Task>? requestTaskResourceList = await GetRequestTaskResourceList(claimRequest.requisition);
         if (requestTaskResourceList == null)
         {
+            _errorMessageList.Add($"Claim failed as no Tasks resources found for the provided requisition " +
+                                  $"identifier: {claimRequest.requisition.System}|{claimRequest.requisition.Value}");
             LogErrorMessage(claimRequest.requisition.Value);
             return GetRequisitionNotFoundClaimOperationOutcome();
         }
 
-        logger.LogInformation("{Requisition}: Found target request resources", claimRequest.requisition.Value);
+        logger.LogInformation("{Requisition}: Found target request Task resources", claimRequest.requisition.Value);
         
         List<Hl7.Fhir.Model.Task>? requestTaskList = ValidateRequestIsClaimable(requestTaskResourceList);
         if (requestTaskList == null)
@@ -100,7 +104,7 @@ public class ClaimOperation(
         claimedTaskTransactionBundle = await _fhirNavigator.Transaction(claimedTaskTransactionBundle);
         groupTask = GetRequestGroupTaskFromTaskBundle(claimedTaskTransactionBundle.Entry);
 
-        logger.LogInformation("{Requisition}: Request claimed successfuly", claimRequest.requisition.Value);
+        logger.LogInformation("{Requisition}: Request claimed successfully", claimRequest.requisition.Value);
         logger.LogInformation("{Requisition}: New Group Task ID {NewGroupTaskResourceId}", claimRequest.requisition.Value, groupTask.Id);
         return GetSuccessfulClaimOperationOutcome(groupTask.Id);
     }
@@ -135,7 +139,7 @@ public class ClaimOperation(
         }
     }
 
-    private void LogRequestClaim(
+    private void LogIncommingClaimRequest(
         ClaimRequest claimRequest)
     {
         if (!string.IsNullOrWhiteSpace(claimRequest.organization.Reference))
@@ -294,6 +298,32 @@ public class ClaimOperation(
         return _fhirNavigator.Cache.GetList<Hl7.Fhir.Model.Task>();
     }
 
+    // private static SearchParams GetRequestResourcesListQueryOLD(
+    //     string claimRequestSystem,
+    //     string claimRequestValue)
+    // {
+    //     SearchParams fhirQuery = new SearchParams();
+    //     fhirQuery.Add("group-identifier", $"{claimRequestSystem}|{claimRequestValue}");
+    //     fhirQuery.Add("status:not", Hl7.Fhir.Model.Task.TaskStatus.Cancelled.GetLiteral());
+    //     fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE, $"{ResourceType.Task.GetLiteral()}:patient");
+    //     fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE,
+    //         $"{ResourceType.Task.GetLiteral()}:focus:{ResourceType.ServiceRequest.GetLiteral()}");
+    //     fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE,
+    //         $"{ResourceType.Task.GetLiteral()}:focus:{ResourceType.CommunicationRequest.GetLiteral()}");
+    //     fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE,
+    //         $"{ResourceType.Task.GetLiteral()}:owner:{ResourceType.Organization.GetLiteral()}");
+    //     fhirQuery.Add($"{SearchParams.SEARCH_PARAM_REVINCLUDE}:{IncludeModifier.Iterate.GetLiteral()}",
+    //         $"{ResourceType.Consent.GetLiteral()}:data:{ResourceType.ServiceRequest.GetLiteral()}");
+    //     //fhirQuery.Add($"{SearchParams.SEARCH_PARAM_INCLUDE}", $"{ResourceType.Task.GetLiteral()}:requester:{ResourceType.PractitionerRole.GetLiteral()}");
+    //     fhirQuery.Add($"{SearchParams.SEARCH_PARAM_INCLUDE}:{IncludeModifier.Iterate.GetLiteral()}",
+    //         $"{ResourceType.ServiceRequest.GetLiteral()}:requester:{ResourceType.PractitionerRole.GetLiteral()}");
+    //     fhirQuery.Add($"{SearchParams.SEARCH_PARAM_INCLUDE}:{IncludeModifier.Iterate.GetLiteral()}",
+    //         $"{ResourceType.PractitionerRole.GetLiteral()}:practitioner:{ResourceType.Practitioner.GetLiteral()}");
+    //     fhirQuery.Add("_count", "500");
+    //
+    //     return fhirQuery;
+    // }
+    
     private static SearchParams GetRequestResourcesListQuery(
         string claimRequestSystem,
         string claimRequestValue)
@@ -301,22 +331,6 @@ public class ClaimOperation(
         SearchParams fhirQuery = new SearchParams();
         fhirQuery.Add("group-identifier", $"{claimRequestSystem}|{claimRequestValue}");
         fhirQuery.Add("status:not", Hl7.Fhir.Model.Task.TaskStatus.Cancelled.GetLiteral());
-        fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE, $"{ResourceType.Task.GetLiteral()}:patient");
-        fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE,
-            $"{ResourceType.Task.GetLiteral()}:focus:{ResourceType.ServiceRequest.GetLiteral()}");
-        fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE,
-            $"{ResourceType.Task.GetLiteral()}:focus:{ResourceType.CommunicationRequest.GetLiteral()}");
-        fhirQuery.Add(SearchParams.SEARCH_PARAM_INCLUDE,
-            $"{ResourceType.Task.GetLiteral()}:owner:{ResourceType.Organization.GetLiteral()}");
-        fhirQuery.Add($"{SearchParams.SEARCH_PARAM_REVINCLUDE}:{IncludeModifier.Iterate.GetLiteral()}",
-            $"{ResourceType.Consent.GetLiteral()}:data:{ResourceType.ServiceRequest.GetLiteral()}");
-        //fhirQuery.Add($"{SearchParams.SEARCH_PARAM_INCLUDE}", $"{ResourceType.Task.GetLiteral()}:requester:{ResourceType.PractitionerRole.GetLiteral()}");
-        fhirQuery.Add($"{SearchParams.SEARCH_PARAM_INCLUDE}:{IncludeModifier.Iterate.GetLiteral()}",
-            $"{ResourceType.ServiceRequest.GetLiteral()}:requester:{ResourceType.PractitionerRole.GetLiteral()}");
-        fhirQuery.Add($"{SearchParams.SEARCH_PARAM_INCLUDE}:{IncludeModifier.Iterate.GetLiteral()}",
-            $"{ResourceType.PractitionerRole.GetLiteral()}:practitioner:{ResourceType.Practitioner.GetLiteral()}");
-        fhirQuery.Add("_count", "500");
-
         return fhirQuery;
     }
 
@@ -369,6 +383,7 @@ public class ClaimOperation(
                 "When construction an error OperationOutcome response, with in the class {ClassName}, zero " +
                 "error messages were provided to the method",
                 nameof(ClaimOperation));
+            
             return new ClaimOperationOutcome(
                 Resource: operationOutcomeSupport.GetError(messageList: ["Unknown error"]),
                 HttpStatusCode: HttpStatusCode.BadRequest);
